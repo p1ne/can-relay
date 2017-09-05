@@ -9,9 +9,17 @@
 #include "CANMessage.h"
 
 uint8_t i;
-boolean rcvFlag;
 uint8_t currentGear = 0x0;
 uint8_t previousGear = 0x0;
+
+uint8_t filtNo;
+uint8_t rcvBuf[8];
+boolean rcvFlag;
+uint8_t rcvLen;
+uint32_t rcvCanId = 0x0;
+
+const uint8_t SPI_CS_PIN = 10;
+MCP_CAN CAN(SPI_CS_PIN);
 
 void MCP2515_ISR()
 {
