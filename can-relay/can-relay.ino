@@ -17,6 +17,9 @@ uint8_t rcvBuf[8];
 boolean rcvFlag;
 uint8_t rcvLen;
 uint32_t rcvCanId = 0x0;
+bool ignitionOn = false;
+
+#define RELAY_PIN 3
 
 const uint8_t SPI_CS_PIN = 10;
 MCP_CAN CAN(SPI_CS_PIN);
@@ -50,7 +53,12 @@ void detachCAN()
 
 void setup()
 {
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);
+
   Serial.begin(115200);
+
+  ignitionOn = false;
 
   START_INIT:
     if(CAN_OK == CAN.begin(MCP_STDEXT, CAN_125KBPS, MCP_8MHZ)) {
@@ -68,14 +76,12 @@ void setup()
     CAN.init_Mask(0, CAN_STDID, 0x07FF0000);   // there are 2 mask in mcp2515, you need to set both of them
     CAN.init_Mask(1, CAN_STDID, 0x07FF0000);
     for (i=0;i<5;i++)
-      CAN.init_Filt(i, CAN_STDID, 0x03B00000);   // Gear
+      CAN.init_Filt(i, CAN_STDID, 0x04230000); // Speed data
 
+    CAN.init_Filt(filtNo++, CAN_STDID, 0x04230000); // Speed data
     CAN.init_Filt(filtNo++, CAN_STDID, 0x03B00000);   // Gear
 
     CAN.setMode(MCP_NORMAL);
-
-    pinMode(3, OUTPUT);
-
 }
 
 void loop()
@@ -87,25 +93,40 @@ void loop()
       CAN.readMsgBuf(&rcvCanId, &rcvLen, rcvBuf);
 
       switch (rcvCanId) {
+        case 0x423: { // Speed, RPM
+          noInterrupts();
+          if ( ignitionOn && (rcvBuf[0] == 0xFF)) { // got 423 message for ignition off
+            ignitionOn = false;
+            digitalWrite(RELAY_PIN, LOW);
+          }
+
+          if ( !ignitionOn && (rcvBuf[0] != 0xFF)) { // got 423 message for ignition on
+            ignitionOn = true;
+          }
+          interrupts();
+        }
+          break;
+
         case 0x3b0: { // Gear
-              noInterrupts();
-              previousGear = currentGear;
-              currentGear = rcvBuf[0];
-              interrupts();
-            }
+          noInterrupts();
+          previousGear = currentGear;
+          currentGear = rcvBuf[0];
+          interrupts();
         }
           break;
       }
-  }
+    }
 
-  noInterrupts();
-  if ( (currentGear == 0x0D) && (previousGear != 0x0D) ) {  // Moved to parking
-    digitalWrite(3, HIGH);
-  }
+    if (ignitionOn) {
+      noInterrupts();
+      if ( (currentGear == 0x0D) && (previousGear != 0x0D) ) {  // Moved to parking
+        digitalWrite(RELAY_PIN, HIGH);
+      }
 
-  if ( (currentGear != 0x0D) && (previousGear == 0x0D) ) {  // Moved from parking
-    digitalWrite(3, LOW);
+      if ( (currentGear != 0x0D) && (previousGear == 0x0D) ) {  // Moved from parking
+        digitalWrite(RELAY_PIN, LOW);
+      }
+      interrupts();
+    }
   }
-  interrupts();
-
 }
