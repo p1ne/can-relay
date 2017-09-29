@@ -9,15 +9,16 @@
 #include "CANMessage.h"
 
 uint8_t i;
-uint8_t currentGear = 0x0;
-uint8_t previousGear = 0x0;
+uint8_t gear = 0x0;
+bool markerLight = false;
+bool relayStatus = false;
+bool ignitionOn = false;
 
 uint8_t filtNo;
 uint8_t rcvBuf[8];
 boolean rcvFlag;
 uint8_t rcvLen;
 uint32_t rcvCanId = 0x0;
-bool ignitionOn = false;
 
 #define RELAY_PIN 3
 
@@ -51,13 +52,27 @@ void detachCAN()
   #endif
 }
 
+void setRelay(const bool status) {
+  if (status != relayStatus) {
+    Serial.println("setRelay(): " + String(status) + " " + String(gear, HEX) + " " + String(markerLight));
+
+    relayStatus = status;
+    digitalWrite(RELAY_PIN, status ? HIGH : LOW);
+    delay(1000);
+  }
+}
+
+bool getRelay() {
+  return relayStatus;
+}
+
 void setup()
 {
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
 
   Serial.begin(115200);
-
+  Serial.println("Started low");
   ignitionOn = false;
 
   START_INIT:
@@ -80,9 +95,11 @@ void setup()
 
     CAN.init_Filt(filtNo++, CAN_STDID, 0x04230000); // Speed data
     CAN.init_Filt(filtNo++, CAN_STDID, 0x03B00000);   // Gear
+    CAN.init_Filt(filtNo++, CAN_STDID, 0x03C30000);   // Lights
 
     CAN.setMode(MCP_NORMAL);
 }
+
 
 void loop()
 {
@@ -93,40 +110,39 @@ void loop()
       CAN.readMsgBuf(&rcvCanId, &rcvLen, rcvBuf);
 
       switch (rcvCanId) {
-        case 0x423: { // Speed, RPM
-          noInterrupts();
-          if ( ignitionOn && (rcvBuf[0] == 0xFF)) { // got 423 message for ignition off
-            ignitionOn = false;
-            digitalWrite(RELAY_PIN, LOW);
-          }
-
-          if ( !ignitionOn && (rcvBuf[0] != 0xFF)) { // got 423 message for ignition on
-            ignitionOn = true;
-          }
-          interrupts();
+        case 0x423: { // Ignition state
+          ignitionOn = (rcvBuf[0] != 0xFF);
         }
           break;
 
         case 0x3b0: { // Gear
-          noInterrupts();
-          previousGear = currentGear;
-          currentGear = rcvBuf[0];
-          interrupts();
+          gear = rcvBuf[0];
+        }
+          break;
+
+        case 0x3c3: { // Lights state
+          markerLight = (bool)(rcvBuf[1] & 0x01);
         }
           break;
       }
     }
 
+    Serial.println("status: relay:" + String(getRelay()) + " gear: " + String(gear, HEX) + " marker: " + String(markerLight) + "ign: " + String(ignitionOn));
+
     if (ignitionOn) {
-      noInterrupts();
-      if ( (currentGear == 0x0D) && (previousGear != 0x0D) ) {  // Moved to parking
-        digitalWrite(RELAY_PIN, HIGH);
+      if ( (gear == 0x0D) && !getRelay() ) {  // On parking - turn relay on
+        if (markerLight) {
+          setRelay(false);
+        } else {
+          setRelay(true);
+        }
       }
 
-      if ( (currentGear != 0x0D) && (previousGear == 0x0D) ) {  // Moved from parking
-        digitalWrite(RELAY_PIN, LOW);
+      if ( (gear != 0x0D) && getRelay() ) {  // Out of parking - turn relay off
+        setRelay(false);
       }
-      interrupts();
+    } else {
+      setRelay(false);
     }
   }
 }
